@@ -27,16 +27,18 @@ def detect(save_img=False):
 
     # Initialize
     set_logging()
-    device = select_device(opt.device)
+    # device = select_device(opt.device)
+    device = torch.device('cpu')  # 比特大陆对导出的jit模型要求：device必须是cpu
     half = device.type != 'cpu'  # half precision only supported on CUDA
 
     # Load model
     model = attempt_load(weights, map_location=device)  # load FP32 model
     stride = int(model.stride.max())  # model stride
-    imgsz = check_img_size(imgsz, s=stride)  # check img_size
+    imgsz[0] = check_img_size(imgsz[0], s=stride)  # check img_size
+    imgsz[1] = check_img_size(imgsz[1], s=stride)  # check img_size
 
-    if trace:
-        model = TracedModel(model, device, opt.img_size)
+    # if trace:
+    #     model = TracedModel(model, device, opt.img_size)
 
     if half:
         model.half()  # to FP16
@@ -53,7 +55,7 @@ def detect(save_img=False):
         view_img = check_imshow()
         cudnn.benchmark = True  # set True to speed up constant image size inference
         dataset = LoadStreams(source, img_size=imgsz, stride=stride)
-    else:
+    else:  # jit模型推理时，需要将LoadImage类的letterbox函数中auto参数设置为False,否则因尺寸不匹配报错
         dataset = LoadImages(source, img_size=imgsz, stride=stride)
 
     # Get names and colors
@@ -62,9 +64,14 @@ def detect(save_img=False):
 
     # Run inference
     if device.type != 'cpu':
-        model(torch.zeros(1, 3, imgsz, imgsz).to(device).type_as(next(model.parameters())))  # run once
-    old_img_w = old_img_h = imgsz
+        model(torch.zeros(1, 3, imgsz[0], imgsz[1]).to(device).type_as(next(model.parameters())))  # run once
+
+    old_img_h, old_img_w = imgsz
     old_img_b = 1
+
+    # 导出jit模型
+    jitmodel = torch.jit.trace(model, torch.zeros(1, 3, imgsz[0], imgsz[1]), strict=False)  # 不加strict=False也行
+    torch.jit.save(jitmodel, "weights/jit_model.pt")
 
     t0 = time.time()
     for path, img, im0s, vid_cap in dataset:
@@ -73,7 +80,7 @@ def detect(save_img=False):
         img /= 255.0  # 0 - 255 to 0.0 - 1.0
         if img.ndimension() == 3:
             img = img.unsqueeze(0)
-
+        print('inference input img.shape:', img.shape)
         # Warmup
         if device.type != 'cpu' and (old_img_b != img.shape[0] or old_img_h != img.shape[2] or old_img_w != img.shape[3]):
             old_img_b = img.shape[0]
@@ -85,7 +92,10 @@ def detect(save_img=False):
         # Inference
         t1 = time_synchronized()
         with torch.no_grad():   # Calculating gradients would cause a GPU memory leak
-            pred = model(img, augment=opt.augment)[0]
+            # pred = model(img, augment=opt.augment)[0]  # pt模型前向推理
+            pred = jitmodel(img)[0]  # jit模型前向推理
+            print(pred.shape)
+
         t2 = time_synchronized()
 
         # Apply NMS
@@ -165,9 +175,9 @@ def detect(save_img=False):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--weights', nargs='+', type=str, default='yolov7.pt', help='model.pt path(s)')
+    parser.add_argument('--weights', nargs='+', type=str, default='weights/Animal_x-d-416-768_20230510.pt', help='model.pt path(s)')
     parser.add_argument('--source', type=str, default='inference/images', help='source')  # file/folder, 0 for webcam
-    parser.add_argument('--img-size', type=int, default=640, help='inference size (pixels)')
+    parser.add_argument('--img-size', type=list, default=[416, 768], help='inference size (pixels)')
     parser.add_argument('--conf-thres', type=float, default=0.25, help='object confidence threshold')
     parser.add_argument('--iou-thres', type=float, default=0.45, help='IOU threshold for NMS')
     parser.add_argument('--device', default='', help='cuda device, i.e. 0 or 0,1,2,3 or cpu')

@@ -18,8 +18,8 @@ from utils.add_nms import RegisterNMS
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--weights', type=str, default='./yolor-csp-c.pt', help='weights path')
-    parser.add_argument('--img-size', nargs='+', type=int, default=[640, 640], help='image size')  # height, width
+    parser.add_argument('--weights', type=str, default='weights/yolov7x.pt', help='weights path')
+    parser.add_argument('--img-size', nargs='+', type=int, default=[416, 768], help='image size')  # height, width
     parser.add_argument('--batch-size', type=int, default=1, help='batch size')
     parser.add_argument('--dynamic', action='store_true', help='dynamic ONNX axes')
     parser.add_argument('--dynamic-batch', action='store_true', help='dynamic batch onnx for tensorrt and onnx-runtime')
@@ -64,7 +64,8 @@ if __name__ == '__main__':
                 m.act = SiLU()
         # elif isinstance(m, models.yolo.Detect):
         #     m.forward = m.forward_export  # assign forward (optional)
-    model.model[-1].export = not opt.grid  # set Detect() layer grid export
+    model.model[-1].export = not opt.grid  # set Detect() layer grid export  # True
+
     y = model(img)  # dry run
     if opt.include_nms:
         model.model[-1].include_nms = True
@@ -73,6 +74,7 @@ if __name__ == '__main__':
     # TorchScript export
     try:
         print('\nStarting TorchScript export with torch %s...' % torch.__version__)
+        model.eval()  # ymd add
         f = opt.weights.replace('.pt', '.torchscript.pt')  # filename
         ts = torch.jit.trace(model, img, strict=False)
         ts.save(f)
@@ -189,7 +191,7 @@ if __name__ == '__main__':
                 print(f'Simplifier failure: {e}')
 
         # print(onnx.helper.printable_graph(onnx_model.graph))  # print a human readable model
-        onnx.save(onnx_model,f)
+        onnx.save(onnx_model, f)
         print('ONNX export success, saved as %s' % f)
 
         if opt.include_nms:
